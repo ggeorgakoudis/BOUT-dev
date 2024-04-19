@@ -65,11 +65,15 @@ struct ArrayData {
     //       even though the Array object itself can't.
 #if BOUT_HAS_UMPIRE
     auto& rm = umpire::ResourceManager::getInstance();
-#if BOUT_HAS_CUDA
-    auto allocator = rm.getAllocator(umpire::resource::Pinned);
-#else
-    auto allocator = rm.getAllocator("HOST");
-#endif
+//#if BOUT_HAS_CUDA
+//    //auto allocator = rm.getAllocator(umpire::resource::Pinned);
+//    //auto allocator = rm.getAllocator(umpire::resource::Device);
+//    //auto allocator = rm.getAllocator(umpire::resource::Unified);
+//#else
+//    auto allocator = rm.getAllocator("HOST");
+//#endif
+    auto allocator = rm.getAllocator(umpire::resource::Host);
+    //auto allocator = rm.getAllocator(umpire::resource::Pinned);
     data = static_cast<T*>(allocator.allocate(size * sizeof(T)));
 #else // BOUT_HAS_UMPIRE
     data = new T[len];

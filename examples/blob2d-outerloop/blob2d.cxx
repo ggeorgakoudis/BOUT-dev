@@ -139,6 +139,8 @@ public:
     if (!boussinesq) {
       // Including full density in vorticit inversion
       phiSolver->setCoefC(n); // Update the 'C' coefficient. See invert_laplace.hxx
+      // TODO: change it to use HYPRE.
+      // TODO: change it to use sundials: solver:type=cvode | config [solver] type = cvode
       phi = phiSolver->solve(vort / n, phi); // Use previous solution as guess
     } else {
       // Background density only (1 in normalised units)
@@ -154,18 +156,36 @@ public:
 
     const auto& region = n.getRegion("RGN_NOBNDRY"); // Region object
 
+    n_acc.toDevice();
+    vort_acc.toDevice();
+    phi_acc.toDevice();
+
+    //std::cout << " BEFORE LAMBDA\n";
+    // TODO: Use RAJA Launch for per-operator execution.
+    // TODO: RAJA tiling.
     // Note: Ensure that all class members are captured explicitly
     //       If this is not done, then the `this` pointer will be captured,
     //       resulting in illegal memory access on GPU devices.
-    BOUT_FOR_RAJA(i, region, CAPTURE(rho_s, R_c, D_n, D_vort)) {
+    BOUT_FOR_RAJA(i, region, CAPTURE(rho_s, R_c, D_n, D_vort, L_par, sheath, compressible)) {
       ddt(n_acc)[i] = -bracket(phi_acc, n_acc, i) - 2 * DDZ(n_acc, i) * (rho_s / R_c)
                       + D_n * Delp2(n_acc, i);
 
       ddt(vort_acc)[i] = -bracket(phi_acc, vort_acc, i)
                          + 2 * DDZ(n_acc, i) * (rho_s / R_c)
                          + D_vort * Delp2(vort_acc, i);
+
+      if (compressible) {
+        ddt(n_acc)[i] -=
+            2 * n_acc[i] * DDZ(phi_acc, i) * (rho_s / R_c); // ExB Compression term
+      }
+
+      if (sheath) {
+        ddt(n_acc)[i] += n_acc[i] * phi_acc[i] * (rho_s / L_par);
+        ddt(vort_acc)[i] += phi_acc[i] * (rho_s / L_par);
+      }
     };
 
+#if 0
     if (compressible) {
       BOUT_FOR_RAJA(i, region, CAPTURE(rho_s, R_c)) {
         ddt(n_acc)[i] -=
@@ -181,6 +201,11 @@ public:
         ddt(vort_acc)[i] += phi_acc[i] * (rho_s / L_par);
       };
     }
+  #endif
+
+    n_acc.toHost();
+    vort_acc.toHost();
+    //phi_acc.toHost();
 
     return 0;
   }

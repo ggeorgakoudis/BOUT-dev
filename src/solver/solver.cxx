@@ -1226,6 +1226,7 @@ void Solver::load_derivs(BoutReal* udata) {
 }
 
 // This function only called during initialisation
+// TODO: need to move to the device.
 void Solver::save_vars(BoutReal* udata) {
   for (const auto& f : f2d) {
     if (!f.var->isAllocated()) {

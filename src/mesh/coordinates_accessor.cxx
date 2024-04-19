@@ -1,5 +1,6 @@
 #include "bout/coordinates_accessor.hxx"
 
+#include "bout/bout_types.hxx"
 #include "bout/mesh.hxx"
 
 #include <map>
@@ -11,10 +12,14 @@ namespace {
 /// Note: This association could perhaps be done by putting
 ///       the Array inside Coordinates, but this keeps things decoupled
 std::map<const Coordinates*, Array<BoutReal>> coords_store;
+std::unordered_map<const Coordinates*, BoutReal *> coords_map;
 } // namespace
 
 CoordinatesAccessor::CoordinatesAccessor(const Coordinates* coords) {
   ASSERT0(coords != nullptr);
+
+  auto& rm = umpire::ResourceManager::getInstance();
+  auto allocator = rm.getAllocator(umpire::resource::MemoryResourceType::Device);
 
   // Size of the mesh in Z. Used to convert 3D -> 2D index
   Mesh* mesh = coords->dx.getMesh();
@@ -23,7 +28,11 @@ CoordinatesAccessor::CoordinatesAccessor(const Coordinates* coords) {
   auto search = coords_store.find(coords);
   if (search != coords_store.end()) {
     // Found, so get the pointer to the data
-    data = search->second.begin();
+    auto host_data = search->second.begin();
+    auto mapping = coords_map.find(coords);
+    if (mapping == coords_map.end())
+      throw BoutException("Missing mapping from host coordinates to device data pointer");
+    data = mapping->second;
     return;
   }
 
@@ -36,12 +45,12 @@ CoordinatesAccessor::CoordinatesAccessor(const Coordinates* coords) {
 #endif
 
   // Create the array and get the underlying data
-  data = coords_store.emplace(coords, array_size).first->second.begin();
+  auto host_data = coords_store.emplace(coords, array_size).first->second.begin();
 
-  // Copy data from Coordinates variable into data array
+  // Copy host_data from Coordinates variable into host_data array
   // Uses the symbol to look up the corresponding Offset
 #define COPY_STRIPE1(symbol) \
-  data[stripe_size * ind.ind + static_cast<int>(Offset::symbol)] = coords->symbol[ind];
+  host_data[stripe_size * ind.ind + static_cast<int>(Offset::symbol)] = coords->symbol[ind];
 
   // Implement copy for each argument
 #define COPY_STRIPE(...) \
@@ -54,15 +63,19 @@ CoordinatesAccessor::CoordinatesAccessor(const Coordinates* coords) {
     COPY_STRIPE(d1_dx, d1_dy, d1_dz);
     COPY_STRIPE(J);
 
-    data[stripe_size * ind.ind + static_cast<int>(Offset::B)] = coords->Bxy[ind];
-    data[stripe_size * ind.ind + static_cast<int>(Offset::Byup)] = coords->Bxy.yup()[ind];
-    data[stripe_size * ind.ind + static_cast<int>(Offset::Bydown)] =
+    host_data[stripe_size * ind.ind + static_cast<int>(Offset::B)] = coords->Bxy[ind];
+    host_data[stripe_size * ind.ind + static_cast<int>(Offset::Byup)] = coords->Bxy.yup()[ind];
+    host_data[stripe_size * ind.ind + static_cast<int>(Offset::Bydown)] =
         coords->Bxy.ydown()[ind];
 
     COPY_STRIPE(G1, G3);
     COPY_STRIPE(g11, g12, g13, g22, g23, g33);
     COPY_STRIPE(g_11, g_12, g_13, g_22, g_23, g_33);
   }
+
+  data = static_cast<BoutReal*>(allocator.allocate(array_size*sizeof(BoutReal)));
+  rm.copy(data, host_data);
+  coords_map.emplace(coords, data);
 }
 
 std::size_t CoordinatesAccessor::clear(const Coordinates* coords) {
@@ -70,6 +83,14 @@ std::size_t CoordinatesAccessor::clear(const Coordinates* coords) {
     // clear all
     std::size_t num_removed = coords_store.size();
     coords_store.clear();
+
+    for(auto mapping : coords_map) {
+      auto& rm = umpire::ResourceManager::getInstance();
+      BoutReal *data = mapping.second;
+      rm.deallocate(data);
+    }
+    coords_map.clear();
+
     return num_removed;
   }
   // Coordinates specified, so only remove one

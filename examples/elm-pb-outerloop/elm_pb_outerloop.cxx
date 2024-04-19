@@ -1554,46 +1554,62 @@ public:
 
     // Equilibrium (2D) fields
     auto P0_acc = Field2DAccessor<>(P0);
+    P0_acc.toDevice();
     auto J0_acc = Field2DAccessor<>(J0);
+    J0_acc.toDevice();
     auto phi0_acc = Field2DAccessor<>(phi0);
+    phi0_acc.toDevice();
     auto B0_acc = Field2DAccessor<>(B0);
+    B0_acc.toDevice()
 
     // Evolving fields
     auto P_acc = FieldAccessor<>(P);
+    P_acc.toDevice();
     auto Psi_acc = FieldAccessor<>(Psi);
+    Psi_acc.toDevice()
     auto U_acc = FieldAccessor<>(U);
+    U_acc.toDevice();
 
     // Derived fields
     auto Jpar_acc = FieldAccessor<>(Jpar);
+    Jpar_acc.toDevice();
     auto phi_acc = FieldAccessor<>(phi);
+    phi_acc.toDevice();
     auto eta_acc = FieldAccessor<>(eta);
+    eta_acc.toDevice();
 
 #if EHYPERVISCOS
     auto Jpar2_acc = FieldAccessor<>(Jpar2);
+    Jpar2_acc.toDevice();
 #endif
 
 #if EVOLVE_JPAR
     Field3D B0U = B0 * U;
     mesh->communicate(B0U);
     auto B0U_acc = FieldAccessor<>(B0U);
+    B0U_acc.toDevice();
 #else
     Field3D B0phi = B0 * phi;
     mesh->communicate(B0phi);
     auto B0phi_acc = FieldAccessor<>(B0phi);
+    B0phi_acc.toDevice();
 
 #if EHALL
     Field3D B0P = B0 * P;
     mesh->communicate(B0 * P);
     auto B0P_acc = FieldAccessor<>(B0P);
+    B0P_acc.toDevice();
 #endif // EHALL
 #endif // EVOLVE_JPAR
 
 #if RELAX_J_VAC
     auto vac_mask_acc = FieldAccessor<>(vac_mask);
+    vac_mask_acc.toDevice();
 #endif
 
 #if INCLUDE_RMP
     auto rmp_Psi_acc = FieldAccessor<>(rmp_Psi);
+    rmp_Psi_acc.toDevice();
 #endif
 
     ////////////////////////////////////////////////////
@@ -1679,6 +1695,8 @@ public:
       ddt(P_acc)[i] = 0.0;
 #endif
     };
+    
+    // Copy back to host.
 
       // Terms which are not yet single index operators
       // Note: Terms which are included in the single index loop

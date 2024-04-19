@@ -4,6 +4,7 @@
 ///
 
 #pragma once
+#include <stdexcept>
 #ifndef FIELD_ACCESSOR_H__
 #define FIELD_ACCESSOR_H__
 
@@ -54,6 +55,27 @@ struct FieldAccessor {
   /// Remove default constructor
   FieldAccessor() = delete;
 
+  // Copies to host only ddt required by host-side processing.
+  void toHost() {
+   auto& rm = umpire::ResourceManager::getInstance();
+   //std::cout << "Copy ddt to host size " << rm.findAllocationRecord(ddt)->size << "\n";
+   rm.copy(host_ddt, ddt);
+  }
+
+  // Copies to device only data, required by device-side processing.
+  void toDevice() {
+   auto& rm = umpire::ResourceManager::getInstance();
+   //std::cout << "Copy data to device size " << rm.findAllocationRecord(data)->size << "\n";
+   rm.copy(data, host_data);
+  }
+
+  // Deallocate device memory.
+  void deallocate() {
+   auto& rm = umpire::ResourceManager::getInstance();
+   rm.deallocate(data);
+   rm.deallocate(ddt);
+  }
+
   /// Constructor from Field3D
   ///
   /// @param[in] f    The field to access. Must already be allocated
@@ -61,7 +83,10 @@ struct FieldAccessor {
     ASSERT0(f.getLocation() == location);
     ASSERT0(f.isAllocated());
 
-    data = BoutRealArray{&f(0, 0, 0)};
+    auto& rm = umpire::ResourceManager::getInstance();
+    auto allocator = rm.getAllocator(umpire::resource::MemoryResourceType::Device);
+    host_data = BoutRealArray{&f(0, 0, 0)};
+    data = BoutRealArray{static_cast<BoutReal*>(allocator.allocate(sizeof(BoutReal) * f.size()))};
 
     // Field size
     nx = f.getNx();
@@ -72,13 +97,19 @@ struct FieldAccessor {
     mesh_nz = f.getMesh()->LocalNz;
 
     if (f.hasParallelSlices()) {
+      // TODO: support parallel slices.
+      throw std::runtime_error("Not supported yet!\n");
       // Get arrays from yup and ydown fields
       yup = BoutRealArray{&(f.yup()(0, 0, 0))};
       ydown = BoutRealArray{&(f.ydown()(0, 0, 0))};
     }
 
     // ddt() array data
-    ddt = BoutRealArray{&(f.timeDeriv()->operator()(0, 0, 0))};
+    auto *timeDerivField = f.timeDeriv();
+    host_ddt = BoutRealArray{&(f.timeDeriv()->operator()(0, 0, 0))};
+    ddt = BoutRealArray{static_cast<BoutReal*>(
+        allocator.allocate(sizeof(BoutReal) * timeDerivField->size()))};
+    //std::cout << "Constructor this " << this << "\n";
   }
 
   /// Provide shorthand for access to field data.
@@ -94,7 +125,9 @@ struct FieldAccessor {
   // Pointers to the field data arrays
   // These are wrapped in BoutRealArray types so they can be indexed with Ind3D or int
 
+  BoutRealArray host_data{nullptr}; ///< Pointer to the Field data
   BoutRealArray data{nullptr}; ///< Pointer to the Field data
+  BoutRealArray host_ddt{nullptr};  ///< Time-derivative data
   BoutRealArray ddt{nullptr};  ///< Time-derivative data
 
   BoutRealArray yup{nullptr};   ///< Pointer to the Field yup data

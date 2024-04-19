@@ -14,6 +14,11 @@
  */
 
 #pragma once
+#include "bout/array.hxx"
+#include "bout/field_accessor.hxx"
+#include <functional>
+#include <type_traits>
+#include <unordered_map>
 #ifndef RAJALIB_H
 #define RAJALIB_H
 
@@ -22,6 +27,19 @@
 #if BOUT_HAS_RAJA and !DISABLE_RAJA
 
 #include "RAJA/RAJA.hpp" // using RAJA lib
+
+
+struct ArrayIndicesDevice {
+  ArrayIndicesDevice() {}
+  ArrayIndicesDevice(int *data, size_t size) : data(data), size(size) {}
+
+  size_t size;
+  int *data;
+};
+
+template <typename IndType>
+std::unordered_map<const Region<IndType> *, ArrayIndicesDevice>
+    region_map;
 
 /// Wrapper around RAJA::forall
 /// Enables computations to be done on CPU or GPU (CUDA).
@@ -44,6 +62,7 @@
 ///
 ///   raja_nobndry << [=](int id) { /* ... */ };
 ///
+template <typename IndType>
 struct RajaForAll {
   RajaForAll() = delete; ///< Need a Region to construct
 
@@ -55,14 +74,35 @@ struct RajaForAll {
   ///
   /// @param region    The region to iterate over
   ///
-  template <typename IndType>
   RajaForAll(const Region<IndType>& region) {
-    auto indices = region.getIndices(); // A std::vector of Ind3D objects
-    _ob_i_ind.reallocate(indices.size());
+    //std::cout << "RAJAFORALL constructor\n";
+    auto mapping = region_map<IndType>.find(&region);
+    //auto mapping = region_map.find(1);
+    if (mapping != region_map<IndType>.end()) {
+      //std::cout << "FOUND region map\n";
+      indicesDevice = mapping->second;
+      //std::cout << "END RAJAFORALL constructor\n";
+      return;
+    }
+
+    auto& rm = umpire::ResourceManager::getInstance();
+    auto indices = region.getIndices();
+    size_t size = indices.size();
+
+    // Create 1D flattened index array on the host.
+    auto hostAllocator = rm.getAllocator(umpire::resource::MemoryResourceType::Host);
+    auto *indicesHost = static_cast<int*>(hostAllocator.allocate(sizeof(int)*size));
+
     // Copy indices into Array
     for (auto i = 0; i < indices.size(); i++) {
-      _ob_i_ind[i] = indices[i].ind;
+      indicesHost[i] = indices[i].ind;
     }
+
+    auto deviceAllocator = rm.getAllocator(umpire::resource::MemoryResourceType::Device);
+    indicesDevice = ArrayIndicesDevice{
+        static_cast<int*>(rm.move(indicesHost, deviceAllocator)), size};
+    region_map<IndType>.emplace(&region, indicesDevice);
+    //std::cout << "END RAJAFORALL constructor\n";
   }
 
   /// Pass a lambda function to RAJA::forall
@@ -77,19 +117,31 @@ struct RajaForAll {
   ///
   template <typename F>
   const RajaForAll& operator<<(F f) const {
+  //std::cout << ">>>>> Stream operator called <<<<<< \n";
     // Get the raw pointer to use on the device
     // Note: must be a local variable
-    const int* _ob_i_ind_raw = &_ob_i_ind[0];
-    RAJA::forall<EXEC_POL>(RAJA::RangeSegment(0, _ob_i_ind.size()),
-                           [=] RAJA_DEVICE(int id) {
+    //const int* _ob_i_ind_raw = &_ob_i_ind[0];
+    //auto& rm = umpire::ResourceManager::getInstance();
+    //auto allocator = rm.getAllocator(umpire::resource::MemoryResourceType::Device);
+    //auto indices = (int *)allocator.allocate(_ob_i_ind.size() * sizeof(int));
+    //rm.copy((void *)indices, (void *)_ob_i_ind_raw);
+    //RAJA::kernel<RAJA::Tile<>, RAJA::For<Lambda<0>> {
+    //
+    //    }
+    auto size = indicesDevice.size;
+    auto *indices = indicesDevice.data;
+    RAJA::forall<EXEC_POL>(RAJA::RangeSegment(0, size),
+                           [=] RAJA_DEVICE(const int id) {
                              // Look up index and call user function
-                             f(_ob_i_ind_raw[id]);
+                             f(indices[id]);
                            });
+    // TODO: deallocate device memory, assumes RAJA::forall is blocking (not async).
+    //std::cout << ">>>>> END Stream operator called <<<<<< \n";
     return *this;
   }
 
 private:
-  Array<int> _ob_i_ind; ///< Holds the index array
+  ArrayIndicesDevice indicesDevice;
 };
 
 /// Create a variable which shadows another (has the same name)
